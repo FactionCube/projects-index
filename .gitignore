@@ -1,0 +1,8 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Generated index outputs
+Projects_Index.html
+PROJECTS_INDEX_AUTO.md
+*.csv
