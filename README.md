@@ -119,7 +119,7 @@ venv
 .git
 __pycache__
 *site-packages*
-*TopFolder/SubFolder1*
+*Hacking/Ghidra_and_Java*
 ```
 
 `.exclude_files.txt`
@@ -141,7 +141,7 @@ python scripts/build_index.py . --recursive \
 Patterns:
 
 * **Component match** (folder/file names only): `venv`, `__pycache__`
-* **Path match** (contains `/` or `\`): `TopFolder/SubFolder1*`, `*site-packages*`
+* **Path match** (contains `/` or `\`): `Hacking/Ghidra_and_Java*`, `*site-packages*`
 * Quotes around patterns are optional.
 
 ---
@@ -173,6 +173,7 @@ At the top of the Python script you can adjust:
 * Use `git` to track script changes and `docs/CHANGELOG.md` to log new features.
 * Add screenshots of your generated dashboard to `examples/` for quick previews.
 * Export CSV regularly if you want a lightweight table of your indexed library.
+* ⚠️ **Note on `.bat` and `.ini` files**: browsers will usually *download* `.bat` files instead of opening them. Running them later in Windows can execute commands, so only run trusted files. `.ini` files are safe text and will usually just display in the browser or download.
 
 ---
 
