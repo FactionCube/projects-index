@@ -1,0 +1,52 @@
+﻿{
+    "Code \u0026 Scripts":  [
+                                ".py",
+                                "python",
+                                "script",
+                                "install",
+                                "setup",
+                                "build"
+                            ],
+    "Mathematics \u0026 Analysis":  [
+                                        "tensor",
+                                        "summation",
+                                        "einstein",
+                                        "continuum",
+                                        "indexnotation"
+                                    ],
+    "Technical Manuals":  [
+                              "manual",
+                              "toolkit",
+                              "readme",
+                              "imac",
+                              "vm"
+                          ],
+    "Cooking \u0026 Kitchen":  [
+                                   "recipe",
+                                   "bread",
+                                   "dough",
+                                   "curry",
+                                   "baking",
+                                   "scone"
+                               ],
+    "Devices \u0026 Experiments":  [
+                                       "ipad",
+                                       "apple pencil",
+                                       "tilt",
+                                       "pressure",
+                                       "resilience"
+                                   ],
+    "Essays \u0026 Notes":  [
+                                "notes",
+                                "essay",
+                                "reasoning",
+                                "journal"
+                            ],
+    "Health \u0026 Care":  [
+                               "routine",
+                               "treatment",
+                               "health",
+                               "care",
+                               "therapy"
+                           ]
+}

@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Iterable, Set
 from fnmatch import fnmatch
 import configparser
+import json
 
 # ---------- Configuration ----------
 EXTENSIONS = {".pdf", ".md", ".txt", ".bat", ".ps1"}
@@ -37,7 +38,7 @@ EXCLUDE_DIRS_DEFAULT: Set[str] = {
 DEFAULT_CATEGORY = "🗃️ Other"
 RECENT_DAYS = 7
 
-CATEGORY_RULES: Dict[str, Tuple[str, ...]] = {
+DEFAULT_CATEGORY_RULES: Dict[str, Tuple[str, ...]] = {
     "📘 Mathematics": (
         "tensor", "summation", "einstein", "directioncosines",
         "potentialvorticity", "geometricoperators",
@@ -75,6 +76,47 @@ CATEGORY_RULES: Dict[str, Tuple[str, ...]] = {
 DEFAULT_INI = ".index_excludes.ini"
 DEFAULT_DIRS_TXT = ".exclude_dirs.txt"
 DEFAULT_FILES_TXT = ".exclude_files.txt"
+
+
+# ---------- Category rules utilities ----------
+
+def normalize_category_rules(raw_rules: Dict[str, Iterable[str]]) -> Dict[str, Tuple[str, ...]]:
+    normalized: Dict[str, Tuple[str, ...]] = {}
+    for category, keywords in (raw_rules or {}).items():
+        if not isinstance(category, str):
+            raise ValueError("Category names must be strings")
+        if keywords is None:
+            keyword_iter: List[str] = []
+        elif isinstance(keywords, str):
+            keyword_iter = [keywords]
+        elif isinstance(keywords, (list, tuple, set)):
+            keyword_iter = list(keywords)
+        else:
+            raise ValueError(f"Keywords for category '{category}' must be a string or iterable of strings")
+        cleaned = tuple(
+            str(k).strip().lower()
+            for k in keyword_iter
+            if str(k).strip()
+        )
+        normalized[category] = cleaned
+    return normalized
+
+def load_category_rules_json(path: Path) -> Dict[str, Tuple[str, ...]]:
+    if not path.exists():
+        raise FileNotFoundError(f"Category rules file not found: {path}")
+    try:
+        raw = path.read_text(encoding='utf-8')
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"Could not decode {path} as UTF-8: {exc}") from exc
+    if raw.startswith('\ufeff'):
+        raw = raw.lstrip('\ufeff')
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError('Category rules JSON must map category names to keyword lists')
+    return normalize_category_rules(data)
 
 # ---------- Helpers ----------
 def _strip_quotes(s: str) -> str:
@@ -188,14 +230,14 @@ def gather_files(root: Path, recursive: bool, exclude_dirs: Iterable[str], exclu
             out.append(p)
     return out
 
-def categorize(filename: str) -> str:
+def categorize(filename: str, category_rules: Dict[str, Tuple[str, ...]]) -> str:
     name = filename.lower()
-    for cat, keywords in CATEGORY_RULES.items():
+    for cat, keywords in category_rules.items():
         if any(k in name for k in keywords):
             return cat
     return DEFAULT_CATEGORY
 
-def build_entries(root: Path, files: List[Path]):
+def build_entries(root: Path, files: List[Path], category_rules: Dict[str, Tuple[str, ...]]):
     now = datetime.now()
     cutoff = now - timedelta(days=RECENT_DAYS)
     entries = []
@@ -211,18 +253,18 @@ def build_entries(root: Path, files: List[Path]):
             "rel": rel,
             "title": p.stem.replace("_", " "),
             "date": mtime.strftime("%Y-%m-%d"),
-            "category": categorize(p.name + " " + str(rel)),
+            "category": categorize(p.name + " " + str(rel), category_rules),
             "mtime": stat.st_mtime,
             "ext": p.suffix.lower(),
             "is_recent": mtime >= cutoff,
         })
     return entries
 
-def group_and_sort(entries):
+def group_and_sort(entries, category_rules: Dict[str, Tuple[str, ...]]):
     buckets: Dict[str, List[dict]] = {}
     for e in entries:
         buckets.setdefault(e["category"], []).append(e)
-    cat_order = list(CATEGORY_RULES.keys()) + [DEFAULT_CATEGORY]
+    cat_order = list(category_rules.keys()) + [DEFAULT_CATEGORY]
     for c in list(buckets.keys()):
         if c not in cat_order:
             cat_order.append(c)
@@ -523,7 +565,8 @@ def main():
                     help="Exclude directories by name or glob pattern (repeatable)")
     ap.add_argument("--exclude-file", action="append", default=[], metavar="PATTERN",
                     help="Exclude files by basename or glob pattern (repeatable)")
-
+    ap.add_argument("--category-rules-json", default=None,
+                    help="Path to a JSON file defining category rules (overrides built-in defaults)")
 
     ap.add_argument("--show-ext", action="store_true",
                 help="Show file extensions as badges in the HTML index")
@@ -554,11 +597,25 @@ def main():
     exclude_dirs.update(args.exclude_dir or [])
     exclude_files.update(args.exclude_file or [])
 
+    category_rules = normalize_category_rules(DEFAULT_CATEGORY_RULES)
+    if args.category_rules_json:
+        supplied = Path(args.category_rules_json).expanduser()
+        if not supplied.exists():
+            fallback = (root / args.category_rules_json)
+            if fallback.exists():
+                supplied = fallback
+            else:
+                ap.error(f"Category rules file not found: {args.category_rules_json}")
+        try:
+            category_rules = load_category_rules_json(supplied)
+        except Exception as exc:
+            ap.error(f"Failed to load category rules from {supplied}: {exc}")
+
     files = gather_files(root, recursive=args.recursive,
                          exclude_dirs=exclude_dirs,
                          exclude_files=exclude_files)
-    entries = build_entries(root, files)
-    grouped = group_and_sort(entries)
+    entries = build_entries(root, files, category_rules)
+    grouped = group_and_sort(entries, category_rules)
 
     if args.format in ("md", "both"):
         md = render_markdown(root, grouped)
