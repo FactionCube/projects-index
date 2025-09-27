@@ -1,0 +1,7 @@
+# One pattern per line (globs ok)
+top_level.txt
+entry_points.txt
+Projects_Index.html
+PROJECTS_INDEX_AUTO.md
+*.log
+*.bak

@@ -1,22 +1,41 @@
 #!/usr/bin/env python3
 """
-build_index_v3_4_recent_ui.py — HTML index with:
-- theme toggle, search, date filters
-- per-section collapse memory
-- Export CSV (with Extension + Recent columns)
-- "Recently Added" badges
-- Legend explaining "New", plus an in-page control to adjust RECENT_DAYS (persists)
+build_index_config_exclude_v2.py — index builder with robust excludes
+
+Enhancements vs build_index_config_exclude.py:
+- Exclude patterns may be quoted in text/INI (we strip surrounding ' ' or " ").
+- Directory excludes support two modes:
+  * Component mode (simple names/globs): 'venv', '__pycache__', 'node_modules*'
+  * Path mode (pattern contains '/' or '\'): matched against the RELATIVE path
+    normalized to POSIX ('Topfolder/Subfolder1*', '*Topfolder/Subfolder2*')
+- File excludes unchanged (basename glob match), but also strip quotes.
 """
 
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Iterable, Set
+from fnmatch import fnmatch
+import configparser
 
 # ---------- Configuration ----------
-EXTENSIONS = {".pdf", ".md", ".txt", ".py", ".bat", ".ps1"}
-EXCLUDES = {"projects_index_auto.md", "projects_index_auto_cleaned.md"}
+EXTENSIONS = {".pdf", ".md", ".txt", ".bat", ".ps1"}
+
+EXCLUDE_FILES_DEFAULT: Set[str] = {
+    "Projects_Index.html",
+    "projects_index_auto.md",
+    "projects_index_auto_cleaned.md",
+    "top_level.txt",
+    "entry_points.txt",
+    ".exclude_dirs.txt",
+    ".exclude_files.txt"
+}
+
+EXCLUDE_DIRS_DEFAULT: Set[str] = {
+    "venv",
+}
+
 DEFAULT_CATEGORY = "🗃️ Other"
-RECENT_DAYS = 7  # Initial default; can be changed from the UI
+RECENT_DAYS = 7
 
 CATEGORY_RULES: Dict[str, Tuple[str, ...]] = {
     "📘 Mathematics": (
@@ -25,7 +44,9 @@ CATEGORY_RULES: Dict[str, Tuple[str, ...]] = {
         "differentialforms", "continuum", "indexnotation", "indicial"
     ),
     "🍳 Cooking Guides": (
-        "blackberry", "muesli", "bircher", "pasty", "scone", "recipe"
+        "blackberry", "muesli", "bircher", "pasty", "scone", "recipe",
+        "cooking", "baking", "bread", "dough", "curry", "spanakopita",
+        "cake", "filo", "cake", "roll"
     ),
     "🛠️ Technical Manuals": (
         "miele", "manual", "greaseweazle", "gw_", "imac", "vm",
@@ -51,13 +72,118 @@ CATEGORY_RULES: Dict[str, Tuple[str, ...]] = {
     ),
 }
 
+DEFAULT_INI = ".index_excludes.ini"
+DEFAULT_DIRS_TXT = ".exclude_dirs.txt"
+DEFAULT_FILES_TXT = ".exclude_files.txt"
+
 # ---------- Helpers ----------
-def gather_files(root: Path, recursive: bool) -> List[Path]:
+def _strip_quotes(s: str) -> str:
+    if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
+        return s[1:-1]
+    return s
+
+def _normalize_patterns(patterns: Iterable[str]) -> List[str]:
+    out: List[str] = []
+    for p in patterns or []:
+        p = _strip_quotes(p.strip())
+        if p:
+            out.append(p)
+    return out
+
+def any_parent_matches(rel: Path, patterns: Iterable[str]) -> bool:
+    """
+    Return True if any exclude-dir pattern matches the relative path.
+    Two strategies:
+      - If pattern contains a path sep ('/' or '\\'), compare against rel.as_posix() (whole relative path).
+      - Otherwise, compare against each component name (case-insensitive).
+    """
+    pats = _normalize_patterns(patterns)
+    if not pats:
+        return False
+
+    rel_posix = rel.as_posix().lower()
+    parts = [p.lower() for p in rel.parts]
+
+    for pat in pats:
+        lpat = pat.lower()
+        if ("/" in lpat) or ("\\" in lpat):
+            lpat_norm = lpat.replace("\\", "/")
+            if fnmatch(rel_posix, lpat_norm):
+                return True
+        else:
+            for name in parts:
+                if fnmatch(name, lpat):
+                    return True
+    return False
+
+def matches_any_file(name: str, patterns: Iterable[str]) -> bool:
+    pats = _normalize_patterns(patterns)
+    if not pats:
+        return False
+    lname = name.lower()
+    for pat in pats:
+        if fnmatch(lname, pat.lower()):
+            return True
+    return False
+
+def read_patterns_textfile(path: Path) -> List[str]:
+    out: List[str] = []
+    try:
+        content = path.read_text(encoding="utf-8", errors="ignore")
+    except FileNotFoundError:
+        return out
+    for line in content.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or s.startswith(";"):
+            continue
+        out.append(_strip_quotes(s))
+    return out
+
+def read_patterns_ini(path: Path) -> Tuple[List[str], List[str]]:
+    dirs: List[str] = []
+    files: List[str] = []
+    if not path.exists():
+        return dirs, files
+    cfg = configparser.ConfigParser()
+    try:
+        cfg.read(path, encoding="utf-8")
+    except Exception:
+        return dirs, files
+
+    def parse_list(val: str) -> List[str]:
+        if not val:
+            return []
+        parts = []
+        for line in val.replace("\r", "\n").split("\n"):
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith(";"):
+                continue
+            parts.extend([_strip_quotes(p.strip()) for p in line.split(",") if p.strip()])
+        return parts
+
+    if cfg.has_section("exclude_dirs"):
+        raw = cfg.get("exclude_dirs", "patterns", fallback="")
+        dirs = parse_list(raw)
+    if cfg.has_section("exclude_files"):
+        raw = cfg.get("exclude_files", "patterns", fallback="")
+        files = parse_list(raw)
+
+    return dirs, files
+
+def gather_files(root: Path, recursive: bool, exclude_dirs: Iterable[str], exclude_files: Iterable[str]) -> List[Path]:
     it = root.rglob("*") if recursive else root.glob("*")
     out = []
     for p in it:
+        try:
+            rel = p.relative_to(root)
+        except Exception:
+            rel = p
+
+        if any_parent_matches(rel.parent, exclude_dirs):
+            continue
+
         if p.is_file() and p.suffix.lower() in EXTENSIONS:
-            if p.name.lower() in EXCLUDES:
+            if matches_any_file(p.name, exclude_files):
                 continue
             out.append(p)
     return out
@@ -69,7 +195,7 @@ def categorize(filename: str) -> str:
             return cat
     return DEFAULT_CATEGORY
 
-def build_entries(root: Path, files: List[Path]) -> List[dict]:
+def build_entries(root: Path, files: List[Path]):
     now = datetime.now()
     cutoff = now - timedelta(days=RECENT_DAYS)
     entries = []
@@ -92,7 +218,7 @@ def build_entries(root: Path, files: List[Path]) -> List[dict]:
         })
     return entries
 
-def group_and_sort(entries: List[dict]):
+def group_and_sort(entries):
     buckets: Dict[str, List[dict]] = {}
     for e in entries:
         buckets.setdefault(e["category"], []).append(e)
@@ -104,10 +230,9 @@ def group_and_sort(entries: List[dict]):
         buckets[cat].sort(key=lambda x: -x["mtime"])
     return [(c, buckets[c]) for c in cat_order if c in buckets]
 
-# ---------- Renderers ----------
 def render_markdown(root: Path, grouped) -> str:
     lines = [
-        "# 📚 Projects Index (Auto‑Sorted)",
+        "# 📚 Projects Index (Auto-Sorted)",
         "",
         f"_Scanned folder_: `{root}`",
         "",
@@ -117,24 +242,19 @@ def render_markdown(root: Path, grouped) -> str:
         "",
     ]
     for cat, items in grouped:
-        lines.append(f"## {cat}")
-        lines.append("")
+        lines.append(f"## {cat}\n")
         for e in items:
             rel = str(e["rel"]).replace("\\", "/")
             tag = "  *(New)*" if e.get("is_recent") else ""
             lines.append(f"- [{e['title']}](./{rel}) — *Date: {e['date']}*{tag}")
-        lines.append("")
-        lines.append("---")
-        lines.append("")
+        lines.append("\n---\n")
     lines += [
-        "### 🛠 How to use",
+        "### 🛠 Exclude patterns",
         "",
-        "- Place your PDFs/MD/TXT in this folder (or subfolders if using `--recursive`).",
+        "- **Component match** (names only): `venv`, `__pycache__`, `node_modules*`",
+        "- **Path match** (include `/` or `\\`): `Hacking/Ghidra_and_Java*`, `*Hacking/Nvidia*`",
+        "- Quotes around patterns are optional; we strip them if present.",
         "",
-        "- Re‑run this script to refresh the index.",
-        "",
-        "- Edit `CATEGORY_RULES` and `RECENT_DAYS` in the script to tweak grouping and recency.",
-        ""
     ]
     return "\n".join(lines)
 
@@ -223,10 +343,9 @@ def render_html(root: Path, grouped) -> str:
     parts.append("""
 </main>
 <footer class="container">
-  Generated by build_index_v3_4_recent_ui.py. Links are relative; open this file from the same folder tree for best results.
+  Generated by build_index_config_exclude_v2.py.
 </footer>
 <script>
-  // --- Theme init: saved -> system -> dark ---
   const html = document.documentElement;
   const savedTheme = localStorage.getItem('proj.theme');
   if (savedTheme) {
@@ -235,8 +354,6 @@ def render_html(root: Path, grouped) -> str:
     const prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
     html.setAttribute('data-theme', prefersLight ? 'light' : 'dark');
   }
-
-  // --- Theme toggle button ---
   const themeBtn = document.getElementById('theme');
   themeBtn.addEventListener('click', () => {
     const current = html.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
@@ -245,7 +362,6 @@ def render_html(root: Path, grouped) -> str:
     themeBtn.blur();
   });
 
-  // --- Controls ---
   const q = document.getElementById('q');
   const from = document.getElementById('from');
   const to = document.getElementById('to');
@@ -259,7 +375,6 @@ def render_html(root: Path, grouped) -> str:
   let collapsed = false;
   let recentOnly = false;
 
-  // Persisted recent days in localStorage
   const savedDays = parseInt(localStorage.getItem('proj.recentDays') || '', 10);
   if (!isNaN(savedDays) && savedDays > 0) {
     recentDaysInput.value = String(savedDays);
@@ -267,8 +382,8 @@ def render_html(root: Path, grouped) -> str:
   }
 
   function passDateRange(dateStr) {
-    const valFrom = from.value; // "YYYY-MM"
-    const valTo = to.value;     // "YYYY-MM"
+    const valFrom = from.value;
+    const valTo = to.value;
     const key = dateStr.slice(0, 7);
     if (valFrom && key < valFrom) return false;
     if (valTo && key > valTo) return false;
@@ -279,7 +394,7 @@ def render_html(root: Path, grouped) -> str:
     const now = new Date();
     const cutoff = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
     document.querySelectorAll('li').forEach(li => {
-      const dateStr = li.dataset.date;            // "YYYY-MM-DD"
+      const dateStr = li.dataset.date;
       const d = new Date(dateStr + 'T00:00:00');
       const isRecent = d >= cutoff;
       li.dataset.recent = isRecent ? 'true' : 'false';
@@ -318,7 +433,6 @@ def render_html(root: Path, grouped) -> str:
     q.value = ''; from.value = ''; to.value = ''; recentOnly = false; recentOnlyBtn.textContent = 'Recent only'; applyFilters();
   });
 
-  // Collapse/expand all
   toggle.addEventListener('click', () => {
     collapsed = !collapsed;
     document.querySelectorAll('section').forEach(sec => {
@@ -329,14 +443,12 @@ def render_html(root: Path, grouped) -> str:
     toggle.blur();
   });
 
-  // Recent only toggle
   recentOnlyBtn.addEventListener('click', () => {
     recentOnly = !recentOnly;
     recentOnlyBtn.textContent = recentOnly ? 'All items' : 'Recent only';
     applyFilters();
   });
 
-  // Apply new Recent-days window
   applyRecentBtn.addEventListener('click', () => {
     const days = parseInt(recentDaysInput.value, 10);
     if (isNaN(days) || days < 1) { alert('Please enter a positive number of days.'); return; }
@@ -346,18 +458,16 @@ def render_html(root: Path, grouped) -> str:
     applyFilters();
   });
 
-  // Initialize with saved recent days (if any)
   if (!isNaN(savedDays) && savedDays > 0) {
     recomputeRecentBadges(savedDays);
   }
 
-  // --- Export CSV ---
   csvBtn.addEventListener('click', () => {
     const rows = [['Category','Title','Path','Date','Extension','Recent']];
     document.querySelectorAll('section').forEach(sec => {
       const category = sec.querySelector('h2').textContent;
       sec.querySelectorAll('li').forEach(li => {
-        if (li.classList.contains('hidden')) return; // export only visible after filters
+        if (li.classList.contains('hidden')) return;
         const title = li.querySelector('a').textContent;
         const path = li.dataset.link || li.querySelector('a').getAttribute('href');
         const date = li.dataset.date;
@@ -378,26 +488,57 @@ def render_html(root: Path, grouped) -> str:
     setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
   });
 
-  // Initial pass
   applyFilters();
 </script>
 </body>
 </html>""")
     return "\n".join(parts)
 
-# ---------- CLI ----------
 def main():
     import argparse
-    ap = argparse.ArgumentParser(description="Generate an auto‑sorted index with Recent badges, legend, and adjustable window.")
+    ap = argparse.ArgumentParser(description="Index with robust excludes (quoted patterns + path-aware)")
     ap.add_argument("path", nargs="?", default=".", help="Folder to scan (default: current directory)")
     ap.add_argument("--recursive", action="store_true", help="Scan subfolders recursively")
     ap.add_argument("--format", choices=["md","html","both"], default="both", help="Output format (default: both)")
     ap.add_argument("--out-md", default="PROJECTS_INDEX_AUTO.md", help="Markdown output filename")
     ap.add_argument("--out-html", default="Projects_Index.html", help="HTML output filename")
-    args = ap.parse_args()
 
+    ap.add_argument("--config", default=None, help="Path to INI config (default: search .index_excludes.ini)")
+    ap.add_argument("--exclude-dirs-file", default=None, help="Path to text file with directory patterns (default: search .exclude_dirs.txt)")
+    ap.add_argument("--exclude-files-file", default=None, help="Path to text file with file patterns (default: search .exclude_files.txt)")
+    ap.add_argument("--exclude-dir", action="append", default=[], metavar="PATTERN",
+                    help="Exclude directories by name or glob pattern (repeatable)")
+    ap.add_argument("--exclude-file", action="append", default=[], metavar="PATTERN",
+                    help="Exclude files by basename or glob pattern (repeatable)")
+
+    args = ap.parse_args()
     root = Path(args.path).expanduser().resolve()
-    files = gather_files(root, recursive=args.recursive)
+
+    # Defaults
+    exclude_dirs: Set[str] = set(EXCLUDE_DIRS_DEFAULT)
+    exclude_files: Set[str] = set(EXCLUDE_FILES_DEFAULT)
+
+    # INI
+    ini_path = Path(args.config) if args.config else (root / DEFAULT_INI)
+    ini_dirs, ini_files = read_patterns_ini(ini_path)
+    exclude_dirs.update(ini_dirs)
+    exclude_files.update(ini_files)
+
+    # Text files
+    dirs_file_path = Path(args.exclude_dirs_file) if args.exclude_dirs_file else (root / DEFAULT_DIRS_TXT)
+    files_file_path = Path(args.exclude_files_file) if args.exclude_files_file else (root / DEFAULT_FILES_TXT)
+    if dirs_file_path.exists():
+        exclude_dirs.update(read_patterns_textfile(dirs_file_path))
+    if files_file_path.exists():
+        exclude_files.update(read_patterns_textfile(files_file_path))
+
+    # CLI
+    exclude_dirs.update(args.exclude_dir or [])
+    exclude_files.update(args.exclude_file or [])
+
+    files = gather_files(root, recursive=args.recursive,
+                         exclude_dirs=exclude_dirs,
+                         exclude_files=exclude_files)
     entries = build_entries(root, files)
     grouped = group_and_sort(entries)
 

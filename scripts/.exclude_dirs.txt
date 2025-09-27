@@ -1,0 +1,6 @@
+# One pattern per line (globs ok)
+venv
+.git
+__pycache__
+*site-packages*
+Visual Studio 2022
