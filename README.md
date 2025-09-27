@@ -96,6 +96,12 @@ Custom output filenames:
 python scripts/build_index.py ~/Library   --out-html index.html --out-md INDEX.md
 ```
 
+Display file extension tags:
+
+```bash
+python scripts/build_index.py --recursive --show-ext
+```
+
 ### Excluding Files and Folders (new)
 
 You can now exclude files and directories from indexing using either a config file, two simple list files, or CLI arguments.

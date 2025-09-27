@@ -258,7 +258,8 @@ def render_markdown(root: Path, grouped) -> str:
     ]
     return "\n".join(lines)
 
-def render_html(root: Path, grouped) -> str:
+#def render_html(root: Path, grouped) -> str:
+def render_html(root: Path, grouped, show_ext: bool = False) -> str:
     from html import escape
     parts = []
     parts.append(f"""<!DOCTYPE html>
@@ -297,6 +298,15 @@ def render_html(root: Path, grouped) -> str:
   .date-stamp {{ color:var(--muted); font-size:12px; margin-top:6px; }}
   .hidden {{ display:none !important; }}
   .badge {{ display:inline-block; font-size:11px; padding:2px 6px; border-radius:999px; margin-left:8px; background:var(--badge); color:white; }}
+  .ext-badge {{ 
+    display:inline-block; 
+    font-size:11px; 
+    padding:2px 6px; 
+    border-radius:999px; 
+    margin-left:8px; 
+    background:var(--border); 
+    color:var(--muted); 
+    }}              
   footer {{ color:var(--muted); font-size:12px; padding:24px 20px; border-top:1px solid var(--border); }}
 </style>
 </head>
@@ -328,17 +338,20 @@ def render_html(root: Path, grouped) -> str:
             title = escape(e["title"])
             link = str(e["rel"]).replace("\\", "/")
             date = escape(e["date"])
-            ext = escape(e["ext"])
+            ext = escape(e["ext"])  # like ".md", ".pdf", ".bat"
             recent_attr = "true" if e.get("is_recent") else "false"
-            badge = ' <span class="badge">New</span>' if e.get("is_recent") else ""
+            new_badge = ' <span class="badge">New</span>' if e.get("is_recent") else ""
+            ext_badge = f' <span class="ext-badge">{ext}</span>' if show_ext else ""
+
             parts.append(
                 f'<li data-title="{title.lower()}" data-date="{date}" '
                 f'data-section="{escape(section_title).lower()}" '
                 f'data-link="./{link}" data-ext="{ext}" data-recent="{recent_attr}">'
-                f'<div><a href="./{link}" target="_blank" rel="noopener">{title}</a>{badge}</div>'
+                f'<div><a href="./{link}" target="_blank" rel="noopener">{title}</a>{ext_badge}{new_badge}</div>'
                 f'<div class="date-stamp">Date: {date}</div>'
                 f"</li>"
             )
+            
         parts.append("</ul></section>")
     parts.append("""
 </main>
@@ -511,6 +524,11 @@ def main():
     ap.add_argument("--exclude-file", action="append", default=[], metavar="PATTERN",
                     help="Exclude files by basename or glob pattern (repeatable)")
 
+
+    ap.add_argument("--show-ext", action="store_true",
+                help="Show file extensions as badges in the HTML index")
+
+
     args = ap.parse_args()
     root = Path(args.path).expanduser().resolve()
 
@@ -548,7 +566,8 @@ def main():
         print(f"Wrote {root / args.out_md}")
 
     if args.format in ("html", "both"):
-        html = render_html(root, grouped)
+#        html = render_html(root, grouped)
+        html = render_html(root, grouped, show_ext=args.show_ext)
         (root / args.out_html).write_text(html, encoding="utf-8")
         print(f"Wrote {root / args.out_html}")
 
