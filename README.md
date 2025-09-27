@@ -102,6 +102,26 @@ Display file extension tags:
 python scripts/build_index.py --recursive --show-ext
 ```
 
+### Custom category rules (new)
+
+Create a JSON file mapping category names to keyword lists and pass it via `--category-rules-json`.
+A sample lives at `scripts/category_rules.sample.json`.
+
+```bash
+python scripts/build_index.py --category-rules-json scripts/category_rules.sample.json
+```
+
+Example structure:
+
+```json
+{
+  "Devices & Experiments": ["ipad", "apple pencil", "tilt"],
+  "Code & Scripts": [".py", "python", "build"]
+}
+```
+
+The script still ships with default categories; the JSON file just overrides them for that run.
+
 ### Excluding Files and Folders (new)
 
 You can now exclude files and directories from indexing using either a config file, two simple list files, or CLI arguments.
@@ -168,7 +188,7 @@ Patterns:
 At the top of the Python script you can adjust:
 
 * **`EXTENSIONS`** → file types to include (`.pdf`, `.md`, `.txt`, `.py`, `.bat`, `.ps1`…)
-* **`CATEGORY_RULES`** → dictionary of keywords to group files into categories
+* **`DEFAULT_CATEGORY_RULES`** → built-in keywords for grouping; override or extend via a JSON file passed with `--category-rules-json`
 * **`RECENT_DAYS`** → default recency threshold (overridden by the UI)
 
 ---
